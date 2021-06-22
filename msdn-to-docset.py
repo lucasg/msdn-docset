@@ -232,6 +232,7 @@ def download_module_contents(configuration, module_name, module_uri, module_dir,
     return module_infos
 
 def _findname(obj, key):
+    """ return the 'toc_title' value associated to a 'href' node """
     if obj.get('href', None)==key:return obj['toc_title']
     for k, v in obj.items():
         if isinstance(v,dict):
@@ -244,119 +245,127 @@ def _findname(obj, key):
                 if item is not None:
                     return item
 
-def crawl_msdn_contents(configuration: Configuration, download_dir : str, ):
+def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, source_dir : str):
+    """ Download sdk-api entries based on TOC """
+    pass
+
+def crawl_msdn_contents(configuration: Configuration, download_dir : str, source_dir : str):
     """ Download MSDN modules and content pages based on TOC """
 
-    # Download top-level toc for module
-    # toc_url = "https://raw.githubusercontent.com/MicrosoftDocs/win32-pr.fr-fr/live/desktop-src/toc.yml"
-    # logging.debug("Downloading msdn root toc : %s" % (toc_url))
-    # r = requests.get(toc_url)
-
-    # yaml=YAML(typ="safe")
-    # top_level_toc = yaml.load(r.text)
-
-    # modules_toc is a web based TOC, where as content_toc is file based
     content_toc = {}
 
     counter = 0
-    for r, d, f in os.walk("/mnt/o/MSDN-Offline/win32/desktop-src/", topdown=True):
-        # import pdb;pdb.set_trace();
-        # if counter >=250:
-        #     break
+    for r, d, f in os.walk(os.path.join(source_dir, "win32-docs", "desktop-src"), topdown=True):
+        
+        if counter >=2000:
+            break
 
         for markdown_file in filter(lambda s: os.path.splitext(s)[1] == ".md" ,f):
-                realarb = os.path.relpath(r, "/mnt/o/MSDN-Offline/win32/desktop-src/")
-                # print(realarb)
-                # print(markdown_file)
+            page_filename, page_ext = os.path.splitext(markdown_file)
 
-               
-                url = "https://docs.microsoft.com/en-us/windows/win32/{0:s}/{1:s}".format(
-                    realarb,
-                    os.path.splitext(markdown_file)[0]
+            realarb = os.path.relpath(r, os.path.join(source_dir, "win32-docs", "desktop-src"))
+            url = "https://docs.microsoft.com/en-us/windows/win32/{0:s}/{1:s}".format(
+                realarb,
+                page_filename
+            )
+
+            # retrieve html of page
+            page_dir = os.path.join(download_dir, "docs.microsoft.com/win32", realarb)
+            filepath = os.path.join(page_dir, "%s.html" % page_filename)
+            logging.debug("[+] download page %s  -> %s " % (url, filepath))
+            download_textfile(url, filepath)
+
+            # don't care about top level pages
+            if realarb == '.':
+                continue
+
+            if realarb not in content_toc.keys():
+
+                # download toc for page
+                toc_url = "https://docs.microsoft.com/en-us/windows/win32/{0:s}/toc.json".format(
+                    realarb
                 )
+                logging.info("[+] download toc for page %s" % (toc_url))
+                toc_r = requests.get(toc_url)
+                if toc_r.status_code != 200:
 
-                page_dir = os.path.join(download_dir, "docs.microsoft.com/win32", realarb)
-                filepath = os.path.join(page_dir, "%s.html" % os.path.splitext(markdown_file)[0])
-                logging.info("[+] download page %s  -> %s " % (url, filepath))
-                download_textfile(url, filepath)
+                    # Could not find a toc for this folder
+                    content_toc[realarb] =  {
+                        'name' : realarb,
+                        'index' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % page_filename),
+                        'entries' : [{
+                            'name' : page_filename,
+                            'path' : os.path.relpath(filepath, download_dir),
+                        }],
+                        'classes' : [],
+                        'attributes' : [],
+                        'toc' : {'items' : [{}]}
+                    }
 
-                # don't care about top level pages
-                if realarb == '.':
-                    continue
-
-                if realarb not in content_toc.keys():
-
-                    # download toc for page
-                    toc_url = "https://docs.microsoft.com/en-us/windows/win32/{0:s}/toc.json".format(
-                        realarb
-                    )
-                    logging.info("[+] download toc for page %s" % (toc_url))
-                    toc_r = requests.get(toc_url)
-                    if toc_r.status_code != 200:
-                        content_toc[realarb] =  {
-                            'name' : realarb,
-                            'index' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % os.path.splitext(markdown_file)[0]),
-                            'cmdlets' : [{
-                                'name' : os.path.splitext(markdown_file)[0],
-                                'path' : os.path.relpath(filepath, download_dir),
-                            }],
-                            'toc' : {'items' : [{}]}
-                        }
-
-                    else:
-                        component_toc = json.loads(requests.get(toc_url).text)
-
-                        component_title = component_toc['items'][0]['toc_title']
-                        component_href = component_toc['items'][0]['href']
-
-
-                        content_toc[realarb] =  {
-                            'name' : component_title,
-                            'index' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % component_href),
-                            'cmdlets' : [{
-                                'name' : os.path.splitext(markdown_file)[0],
-                                'path' : os.path.relpath(filepath, download_dir),
-                            }],
-                            'toc' : component_toc
-                        }
                 else:
+                    component_toc = json.loads(requests.get(toc_url).text)
 
-                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], os.path.splitext(markdown_file)[0])
+                    component_title = component_toc['items'][0]['toc_title']
+                    component_href = component_toc['items'][0]['href']
+
+
+                    content_toc[realarb] =  {
+                        'name' : component_title,
+                        'index' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % component_href),
+                        'entries' : [{
+                            'name' : page_filename,
+                            'path' : os.path.relpath(filepath, download_dir),
+                        }],
+                        'classes' : [],
+                        'attributes' : [],
+                        'toc' : component_toc
+                    }
+            else:
+
+                # Class page
+                if page_filename.startswith("c-"):
+                    logging.info("[+] new class page %s" % (page_filename))
+
+                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], page_filename)
+                    if not page_title:
+                        page_title = page_filename
+
+                    content_toc[realarb]['classes'].append({
+                        'name' : page_title,
+                        'path' : os.path.relpath(filepath, download_dir),
+                    })
+
+                # Attribute page
+                elif page_filename.startswith("a-"):
+                    logging.debug("[+] new attribute page %s" % (page_filename))
+
+                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], page_filename)
+                    if not page_title:
+                        page_title = page_filename
+
+                    content_toc[realarb]['attributes'].append({
+                        'name' : page_title,
+                        'path' : os.path.relpath(filepath, download_dir),
+                    })
+
+                # Generic entry
+                else:
+                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], page_filename)
                     if not page_title:
                         page_title = os.path.splitext(markdown_file)[0]
 
-                    content_toc[realarb]['cmdlets'].append({
+                    content_toc[realarb]['entries'].append({
                         'name' :page_title,
                         'path' : os.path.relpath(filepath, download_dir),
                     })
 
-                # counter+=1
 
-                # if counter >=250:
-                #     break
+            counter+=1
 
-                # import pdb;pdb.set_trace();
+            if counter >=2000:
+                break
 
 
-    # logging.debug("raw modules : %s" % [m['toc_title'] for m in modules_toc['items'][0]['children']])
-
-    # optional filter on selected module
-    # modules = modules_toc['items'][0]['children']
-    # if len(configuration.filter_modules):
-    #     modules = list(filter(lambda m: m['toc_title'].lower() in configuration.filter_modules, modules))
-    #     logging.debug("filtered modules : %s" % [m['toc_title'] for m in modules])
-
-    # Downloading modules contents
-    # for module in modules:
-
-    #     module_name = module['toc_title']
-    #     module_uri = module.get("href")
-    #     module_cmdlets = module['children']
-    #     module_dir = os.path.join(download_dir, Configuration.base_url, module_name)
-
-    #     logging.info("[+] download module %s" % (module_name))
-    #     module_infos = download_module_contents(configuration, module_name, module_uri, module_dir,  module_cmdlets, download_dir)
-    #     content_toc[module_name] = module_infos
 
     return content_toc
 
@@ -385,7 +394,7 @@ def rewrite_soup(configuration : Configuration, soup, html_path : str, documents
         fixed_href = "%s.html" % module_name
     
         if fixed_href != href:
-            logging.info("link rewrite : %s -> %s " % ( href, fixed_href))
+            logging.debug("link rewrite : %s -> %s " % ( href, fixed_href))
             link['href'] = fixed_href
 
     # remove link to external references since we can't support it
@@ -631,16 +640,33 @@ def create_sqlite_database(configuration, content_toc, resources_dir, documents_
         module_path = module['index'].replace(os.sep, '/')
         insert_into_sqlite_db(cur, module_name, "Component", module_path)
 
-        for cmdlet in module['cmdlets']:
-            
-            cmdlet_name = cmdlet['name']
-            if cmdlet_name == module_name:
-                continue
+        print("module : %s" % module_name)
+        print(" -entries : 0x%x" % len(module['entries']))
+        print(" -class : 0x%x" % len(module['classes']))
+        print(" -attr : 0x%x" % len(module['attributes']))
+
+        # import pdb;pdb.set_trace();
+        for entry in module['entries']:
+        
+            # path should be unix compliant
+            entry_path = entry['path'].replace(os.sep, '/')
+
+            insert_into_sqlite_db(cur, entry['name'], "Entry", entry_path)
+
+        for _class in module.get("classes", []):
 
             # path should be unix compliant
-            cmdlet_path = cmdlet['path'].replace(os.sep, '/')
+            class_path = _class['path'].replace(os.sep, '/')
 
-            insert_into_sqlite_db(cur, cmdlet_name, "Entry", cmdlet_path)
+            insert_into_sqlite_db(cur, _class['name'], "Class", class_path)
+
+        for _attr in module.get("attributes", []):
+
+            # path should be unix compliant
+            attr_path = _attr['path'].replace(os.sep, '/')
+
+            insert_into_sqlite_db(cur, _attr['name'], "Attribute", attr_path)
+
         
 
     # commit and close db
@@ -698,7 +724,7 @@ def main(configuration : Configuration):
     #     module_name : {
     #         'name' : str,
     #         'index' : relative path,
-    #         'cmdlets' : [
+    #         'entries' : [
     #             {
     #                 'name' : str,
     #                 'path' : relative path, 
