@@ -15,6 +15,7 @@ import urllib.parse
 import urllib
 import time
 import collections
+import zipfile
 
 from ruamel.yaml import YAML
 import requests
@@ -712,13 +713,33 @@ def main(configuration : Configuration):
     resources_to_dl = set()
 
     """ 0. Prepare folders """
+    source_dir = os.path.join(configuration.build_folder, "_0_win32_source")
+    api_source_dir = os.path.join(configuration.build_folder, "_0_api_sdk_source")
+
     download_dir = os.path.join(configuration.build_folder, "_1_downloaded_contents")
     html_rewrite_dir = os.path.join(configuration.build_folder, "_2_html_rewrite")
     additional_resources_dir = os.path.join(configuration.build_folder, "_3_additional_resources")
     package_dir = os.path.join(configuration.build_folder, "_4_ready_to_be_packaged")
 
-    for folder in [download_dir, html_rewrite_dir, additional_resources_dir, package_dir]:
+    for folder in [source_dir, api_source_dir, download_dir, html_rewrite_dir, additional_resources_dir, package_dir]:
         os.makedirs(folder, exist_ok=True)
+
+    # cloning source directories for scraping contents
+    # logging.info("Downloading win32 markdown zipped sources : %s -> %s" % ("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip")))
+    # download_binary("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip"))
+
+    # logging.info("Extracting win32 markdown zipped sources : ")
+    # with zipfile.ZipFile(os.path.join(source_dir, "docs.zip"), 'r') as zip_ref:
+    #     zip_ref.extractall(source_dir)
+
+    # logging.info("Downloading sdk-api markdown zipped sources : %s -> %s" % ("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip")))
+    # download_binary("https://github.com/MicrosoftDocs/sdk-api/archive/refs/heads/docs.zip", os.path.join(api_source_dir, "docs.zip"))
+
+    # logging.info("Extracting api-sdk markdown zipped sources : ")
+    # with zipfile.ZipFile(os.path.join(api_source_dir, "docs.zip"), 'r') as zip_ref:
+    #     zip_ref.extractall(api_source_dir)
+
+
 
     # _4_ready_to_be_packaged is the final build dir
     docset_dir = os.path.join(package_dir, "%s.docset" % Configuration.docset_name)
@@ -727,10 +748,11 @@ def main(configuration : Configuration):
     document_dir = os.path.join(resources_dir, "Documents")
 
     """ 1. Download html pages """
-    logging.info("[1] scraping web contents")
-    content_toc = crawl_msdn_contents(configuration, download_dir)
+    logging.info("[1] scraping win32 web contents")
+    content_toc = crawl_msdn_contents(configuration, download_dir, source_dir)
 
-    # api_content_toc = crawl_msdn_contents(configuration, download_dir)
+    logging.info("[1] scraping sdk-api web contents")
+    # api_content_toc = crawl_sdk_api_contents(configuration, download_dir, api_source_dir)
 
     # # do not download twice the win10 api since it's quite a handful
     # if os.path.exists(os.path.join(win10_download_dir, "toc.json")):
