@@ -247,12 +247,81 @@ def _findname(obj, key):
 
 def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, source_dir : str):
     """ Download sdk-api entries based on TOC """
-    pass
+    
+    api_content_toc = {
+        'categories' : [],
+        'files' : [],
+        'callbacks' : [],
+        'functions' : [],
+        'enums' : [],
+        'interfaces' : [],
+        'structures' : [],
+
+        'toc' : {}
+    }
+
+    for directory in os.listdir(source_dir):
+
+        # download toc for directory
+        toc_url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}/toc.json".format(directory)
+        logging.info("[+] download toc for directory %s" % (toc_url))
+        toc_r = requests.get(toc_url)
+        if toc_r.status_code == 200:
+            api_content_toc['toc'][directory] = json.loads(requests.get(toc_url).text)
+        else:
+            logging.warning("[!] directory %s has no TOC !" % (toc_url))
+
+        # "meta" directory
+        if directory.startswith("_"):
+
+            url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(
+                directory,
+            )
+            filepath = os.path.join(download_dir, "docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html")
+            logging.info("[+] download page %s  -> %s " % (url, filepath))
+            download_textfile(url, filepath)
+
+            category_title = directory
+            if  api_content_toc['toc'].get(directory, None):
+                category_title = api_content_toc['toc'][directory]['items'][0]['toc_title']
+
+            api_content_toc['categories'].append({
+                'name' : category_title,
+                'path' : os.path.join("docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html"),
+            })
+
+        # directory generated from a file
+        else:
+
+            url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(
+                directory,
+            )
+            filepath = os.path.join(download_dir, "docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html")
+            logging.info("[+] download page %s  -> %s " % (url, filepath))
+            download_textfile(url, filepath)
+
+            category_title = directory
+            if  api_content_toc['toc'].get(directory, None):
+                category_title = api_content_toc['toc'][directory]['items'][0]['toc_title']
+
+            api_content_toc['files'].append({
+                'name' : category_title,
+                'path' : os.path.join("docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html"),
+            })
+
+    return api_content_toc
+
 
 def crawl_msdn_contents(configuration: Configuration, download_dir : str, source_dir : str):
     """ Download MSDN modules and content pages based on TOC """
 
-    content_toc = {}
+    content_toc = {
+        'attributes' : [],
+        'classes' : [],
+        'entries' : [],
+        'guides' : [],
+        'toc' : {},
+    }
 
     counter = 0
     for r, d, f in os.walk(os.path.join(source_dir, "win32-docs", "desktop-src"), topdown=True):
@@ -279,28 +348,27 @@ def crawl_msdn_contents(configuration: Configuration, download_dir : str, source
             if realarb == '.':
                 continue
 
-            if realarb not in content_toc.keys():
+            # First time navigating in this directory
+            if realarb not in content_toc['toc'].keys():
 
                 # download toc for page
                 toc_url = "https://docs.microsoft.com/en-us/windows/win32/{0:s}/toc.json".format(
                     realarb
                 )
                 logging.info("[+] download toc for page %s" % (toc_url))
+
                 toc_r = requests.get(toc_url)
                 if toc_r.status_code != 200:
 
                     # Could not find a toc for this folder
-                    content_toc[realarb] =  {
-                        'name' : realarb,
-                        'index' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % page_filename),
-                        'entries' : [{
-                            'name' : page_filename,
-                            'path' : os.path.relpath(filepath, download_dir),
-                        }],
-                        'classes' : [],
-                        'attributes' : [],
+                    content_toc['toc'][realarb] =  {
                         'toc' : {'items' : [{}]}
                     }
+
+                    content_toc['guides'].append({
+                        'name' : page_filename,
+                        'path' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % page_filename),
+                    })
 
                 else:
                     component_toc = json.loads(requests.get(toc_url).text)
@@ -309,55 +377,55 @@ def crawl_msdn_contents(configuration: Configuration, download_dir : str, source
                     component_href = component_toc['items'][0]['href']
 
 
-                    content_toc[realarb] =  {
-                        'name' : component_title,
-                        'index' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % component_href),
-                        'entries' : [{
-                            'name' : page_filename,
-                            'path' : os.path.relpath(filepath, download_dir),
-                        }],
-                        'classes' : [],
-                        'attributes' : [],
+                    content_toc['toc'][realarb] =  {
                         'toc' : component_toc
                     }
+
+                    content_toc['guides'].append({
+                        'name' : component_title,
+                        'path' : os.path.join(os.path.relpath(page_dir, download_dir), "%s.html" % component_href),
+                    })
+  
+            
+            # Adding current page to content toc
+
+
+            # Class page
+            if "ADSchema" in realarb and page_filename.startswith("c-"):
+                logging.info("[+] new class page %s" % (page_filename))
+
+                page_title =  _findname(content_toc['toc'][realarb]['toc']['items'][0], page_filename)
+                if not page_title:
+                    page_title = page_filename
+
+                content_toc['classes'].append({
+                    'name' : page_title,
+                    'path' : os.path.relpath(filepath, download_dir),
+                })
+
+            # Attribute page
+            elif "ADSchema" in realarb and page_filename.startswith("a-"):
+                logging.debug("[+] new attribute page %s" % (page_filename))
+
+                page_title =  _findname(content_toc['toc'][realarb]['toc']['items'][0], page_filename)
+                if not page_title:
+                    page_title = page_filename
+
+                content_toc['attributes'].append({
+                    'name' : page_title,
+                    'path' : os.path.relpath(filepath, download_dir),
+                })
+
+            # Generic entry
             else:
+                page_title =  _findname(content_toc['toc'][realarb]['toc']['items'][0], page_filename)
+                if not page_title:
+                    page_title = page_filename
 
-                # Class page
-                if page_filename.startswith("c-"):
-                    logging.info("[+] new class page %s" % (page_filename))
-
-                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], page_filename)
-                    if not page_title:
-                        page_title = page_filename
-
-                    content_toc[realarb]['classes'].append({
-                        'name' : page_title,
-                        'path' : os.path.relpath(filepath, download_dir),
-                    })
-
-                # Attribute page
-                elif page_filename.startswith("a-"):
-                    logging.debug("[+] new attribute page %s" % (page_filename))
-
-                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], page_filename)
-                    if not page_title:
-                        page_title = page_filename
-
-                    content_toc[realarb]['attributes'].append({
-                        'name' : page_title,
-                        'path' : os.path.relpath(filepath, download_dir),
-                    })
-
-                # Generic entry
-                else:
-                    page_title =  _findname(content_toc[realarb]['toc']['items'][0], page_filename)
-                    if not page_title:
-                        page_title = os.path.splitext(markdown_file)[0]
-
-                    content_toc[realarb]['entries'].append({
-                        'name' :page_title,
-                        'path' : os.path.relpath(filepath, download_dir),
-                    })
+                content_toc['entries'].append({
+                    'name' :page_title,
+                    'path' : os.path.relpath(filepath, download_dir),
+                })
 
 
             counter+=1
@@ -633,39 +701,25 @@ def create_sqlite_database(configuration, content_toc, resources_dir, documents_
     cur.execute('CREATE TABLE searchIndex(id INTEGER PRIMARY KEY, name TEXT, type TEXT, path TEXT);')
     cur.execute('CREATE UNIQUE INDEX anchor ON searchIndex (name, type, path);')
 
-    
-    for module_name, module in content_toc.items():
 
-        # path should be unix compliant
-        module_path = module['index'].replace(os.sep, '/')
-        insert_into_sqlite_db(cur, module_name, "Component", module_path)
-
-        print("module : %s" % module_name)
-        print(" -entries : 0x%x" % len(module['entries']))
-        print(" -class : 0x%x" % len(module['classes']))
-        print(" -attr : 0x%x" % len(module['attributes']))
-
-        # import pdb;pdb.set_trace();
-        for entry in module['entries']:
+    mapping = {
+        "guides" : "Guide",
+        "attributes" : "Attribute",
+        "classes" : "Class",
+        "entries" : "Entry",
         
-            # path should be unix compliant
-            entry_path = entry['path'].replace(os.sep, '/')
+        "categories" : "Category",
+    }
 
-            insert_into_sqlite_db(cur, entry['name'], "Entry", entry_path)
+    # import pdb;pdb.set_trace()
+    for key in mapping.keys():
 
-        for _class in module.get("classes", []):
-
-            # path should be unix compliant
-            class_path = _class['path'].replace(os.sep, '/')
-
-            insert_into_sqlite_db(cur, _class['name'], "Class", class_path)
-
-        for _attr in module.get("attributes", []):
+        for _value in content_toc.get(key, []):
 
             # path should be unix compliant
-            attr_path = _attr['path'].replace(os.sep, '/')
-
-            insert_into_sqlite_db(cur, _attr['name'], "Attribute", attr_path)
+            value_path = _value['path'].replace(os.sep, '/')
+            insert_into_sqlite_db(cur, _value['name'], mapping[key], value_path)        
+    
 
         
 
@@ -775,10 +829,11 @@ def main(configuration : Configuration):
 
     """ 1. Download html pages """
     logging.info("[1] scraping win32 web contents")
-    content_toc = crawl_msdn_contents(configuration, download_dir, source_dir)
+    content_toc = {}
+    #content_toc = crawl_msdn_contents(configuration, download_dir, source_dir)
 
     logging.info("[1] scraping sdk-api web contents")
-    # api_content_toc = crawl_sdk_api_contents(configuration, download_dir, api_source_dir)
+    api_content_toc = crawl_sdk_api_contents(configuration, download_dir, os.path.join(api_source_dir, "sdk-api-docs/sdk-api-src/content"))
 
     # # do not download twice the win10 api since it's quite a handful
     # if os.path.exists(os.path.join(win10_download_dir, "toc.json")):
@@ -791,9 +846,9 @@ def main(configuration : Configuration):
         
     # Merge win10 api content
     # merge_folders(win10_download_dir, download_dir)
-    # content_toc.update(windows_toc)
-    # with open(os.path.join(download_dir, "toc.json"), "w") as content:
-    #     json.dump(content_toc, content)
+    content_toc.update(api_content_toc)
+    with open(os.path.join(download_dir, "toc.json"), "w") as content:
+        json.dump(content_toc, content)
 
     """ 2.  Parse and rewrite html contents """
     logging.info("[2] rewriting urls and hrefs")
