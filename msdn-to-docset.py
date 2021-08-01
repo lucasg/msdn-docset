@@ -76,13 +76,9 @@ class PoshWebDriver:
 class Configuration:
 
     # STATIC CONSTANTS
-    # posh_doc_api_version = '0.2' # powershell doc api version, not this docset one.
-    # posh_version = '6'
     docset_name = 'MSDN'
 
     domain = "docs.microsoft.com"
-    base_url = "%s/en-us/powershell/module" % domain
-    default_url = "https://%s/?view=powershell-%%s" % (base_url)
     default_theme_uri = "_themes/docs.theme/master/en-us/_themes"
     
     def __init__(self, args):
@@ -104,8 +100,8 @@ class Configuration:
         # powershell docs start page
         self.api_index_url = "https://docs.microsoft.com/en-us/windows/win32/api/"
 
-
         self.docs_index_url = "https://docs.microsoft.com/en-us/windows/win32/desktop-app-technologies"
+
         
 
         # # powershell docs table of contents url
@@ -121,6 +117,8 @@ class Configuration:
 
         # selenium webdriver
         self.webdriver = PoshWebDriver()
+
+        self.crawl_contents  = not args.rewrite_only
 
         # selected module
         # self.filter_modules = [module.lower() for module in args.modules]
@@ -163,10 +161,16 @@ def download_textfile(url : str ,  output_filename : str, params : dict = None):
             time.sleep(2)
         else:
             break
+
+    # do not write 404 pages on disk
+    if r.status_code != 200:
+        return False
     
     r.encoding = 'utf-8'
     with open(output_filename, 'w', encoding="utf-8") as f:
         f.write(r.text)
+
+    return True
 
 
 def make_docset(source_dir, dst_filepath, filename):
@@ -233,6 +237,7 @@ def download_module_contents(configuration, module_name, module_uri, module_dir,
 
 def _findname(obj, key):
     """ return the 'toc_title' value associated to a 'href' node """
+    # print("%r == %s" % (obj.get('href', None), key))
     if obj.get('href', None)==key:return obj['toc_title']
     for k, v in obj.items():
         if isinstance(v,dict):
@@ -245,6 +250,55 @@ def _findname(obj, key):
                 if item is not None:
                     return item
 
+def crawl_sdk_api_folder(configuration: Configuration, download_dir : str, source_dir: str,  directory : str, api_content_toc : dict):
+
+
+    for markdown_filepath in glob.glob(os.path.join(source_dir,directory , "*.md")):
+
+        page_filename, page_ext = os.path.splitext(os.path.basename(markdown_filepath))
+        realarb = os.path.relpath(os.path.dirname(markdown_filepath), source_dir)
+
+        # already processed
+        if page_filename == "index":
+            continue
+
+        url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}/{1:s}".format(realarb, page_filename)
+        filepath = os.path.join(download_dir, "docs.microsoft.com/en-us/windows/win32/api/{0:s}/{1:s}.html".format(realarb, page_filename))
+        logging.info("[+] download page %s  -> %s " % (url, filepath))
+        success = download_textfile(url, filepath)
+
+        if not success:
+            logging.info("[X] could not download page %s  -> %s " % (url, filepath))
+            continue
+
+        
+        url_relpath = "/windows/win32/api/{0:s}/{1:s}".format(realarb, page_filename)
+        page_title =  _findname(api_content_toc['toc'][directory]['items'][0], url_relpath)
+        #logging.info("[+] %s => title '%s'" % (url_relpath, page_title))
+        
+        if page_filename.startswith("nc-"):
+            category = "callbacks"
+        elif page_filename.startswith("ne-"):
+            category = "enums"
+        elif page_filename.startswith("nf-"):
+            category = "functions"
+        elif page_filename.startswith("nn-"):
+            category = "interfaces"
+        elif page_filename.startswith("ns-"):
+            category = "structures"
+        elif page_filename.startswith("nl-"):
+            category = "classes"
+        else:
+            category = "entries"
+
+        api_content_toc[category].append({
+            'name' : page_title,
+            'path' : "docs.microsoft.com/en-us{0:s}.html".format(url_relpath),
+        })
+
+    return api_content_toc
+
+
 def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, source_dir : str):
     """ Download sdk-api entries based on TOC """
     
@@ -256,11 +310,15 @@ def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, sou
         'enums' : [],
         'interfaces' : [],
         'structures' : [],
+        'classes' : [],
 
+        'entries' : [],
         'toc' : {}
     }
 
-    for directory in os.listdir(source_dir):
+    content_dir = os.path.join(source_dir, "sdk-api-docs", "sdk-api-src", "content")
+
+    for directory in os.listdir(content_dir):
 
         # download toc for directory
         toc_url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}/toc.json".format(directory)
@@ -271,24 +329,28 @@ def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, sou
         else:
             logging.warning("[!] directory %s has no TOC !" % (toc_url))
 
+        # only index folders with a toc
+        if  not api_content_toc['toc'].get(directory, None):
+            continue
+
         # "meta" directory
         if directory.startswith("_"):
 
-            url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(
-                directory,
-            )
-            filepath = os.path.join(download_dir, "docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html")
-            logging.info("[+] download page %s  -> %s " % (url, filepath))
-            download_textfile(url, filepath)
+            
+            
+                url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(
+                    directory,
+                )
+                filepath = os.path.join(download_dir, "docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(directory), "index.html")
+                logging.info("[+] download page %s  -> %s " % (url, filepath))
+                download_textfile(url, filepath)
 
-            category_title = directory
-            if  api_content_toc['toc'].get(directory, None):
+                
                 category_title = api_content_toc['toc'][directory]['items'][0]['toc_title']
-
-            api_content_toc['categories'].append({
-                'name' : category_title,
-                'path' : os.path.join("docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html"),
-            })
+                api_content_toc['categories'].append({
+                    'name' : category_title,
+                    'path' : os.path.join("docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(directory), "index.html"),
+                })
 
         # directory generated from a file
         else:
@@ -296,7 +358,7 @@ def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, sou
             url = "https://docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(
                 directory,
             )
-            filepath = os.path.join(download_dir, "docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html")
+            filepath = os.path.join(download_dir, "docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(directory), "index.html")
             logging.info("[+] download page %s  -> %s " % (url, filepath))
             download_textfile(url, filepath)
 
@@ -306,8 +368,11 @@ def crawl_sdk_api_contents(configuration: Configuration, download_dir : str, sou
 
             api_content_toc['files'].append({
                 'name' : category_title,
-                'path' : os.path.join("docs.microsoft.com/win32/api/{0:s}".format(directory), "index.html"),
+                'path' : os.path.join("docs.microsoft.com/en-us/windows/win32/api/{0:s}".format(directory), "index.html"),
             })
+
+
+        api_content_toc = crawl_sdk_api_folder(configuration, download_dir, content_dir, directory, api_content_toc)
 
     return api_content_toc
 
@@ -323,11 +388,11 @@ def crawl_msdn_contents(configuration: Configuration, download_dir : str, source
         'toc' : {},
     }
 
-    counter = 0
+    # counter = 0
     for r, d, f in os.walk(os.path.join(source_dir, "win32-docs", "desktop-src"), topdown=True):
         
-        if counter >=2000:
-            break
+        # if counter >=2000:
+        #     break
 
         for markdown_file in filter(lambda s: os.path.splitext(s)[1] == ".md" ,f):
             page_filename, page_ext = os.path.splitext(markdown_file)
@@ -428,10 +493,10 @@ def crawl_msdn_contents(configuration: Configuration, download_dir : str, source
                 })
 
 
-            counter+=1
+            # counter+=1
 
-            if counter >=2000:
-                break
+            # if counter >=2000:
+            #     break
 
 
 
@@ -458,16 +523,39 @@ def rewrite_soup(configuration : Configuration, soup, html_path : str, documents
         if not len(targets): # badly formated 'a' link
             continue
 
-        module_name = targets[0]
-        fixed_href = "%s.html" % module_name
+        page_target = targets[0]
+        if page_target[-1] == '/': # module index
+            fixed_href = "%sindex.html" % page_target
+        else:
+            fixed_href = "%s.html" % page_target
     
         if fixed_href != href:
-            logging.debug("link rewrite : %s -> %s " % ( href, fixed_href))
+            logging.info("link rewrite : %s -> %s " % ( href, fixed_href))
             link['href'] = fixed_href
 
     # remove link to external references since we can't support it
     for abs_href in soup.findAll("a", { "data-linktype" : "absolute-path"}):
-        abs_href.replace_with(abs_href.text)
+
+        # TODO : some externals hrefs are like this :
+        #   <a href="/en-us/windows/win32/api/activation/nn-activation-iactivationfactory" data-linktype="absolute-path">IActivationFactory</a>
+        # so find a way to fix the link anyway
+        if abs_href['href'].startswith("/en-us/windows/win32/api/"):
+
+            full_url_target = "docs.microsoft.com"  + abs_href['href']
+            full_url_html_page = os.path.relpath(os.path.dirname(html_path), documents_dir)
+
+            rel_href = os.path.join(documents_dir, "docs.microsoft.com"  + abs_href['href'])
+            #rel_href = os.path.relpath(full_url_target, full_url_html_page)
+            if rel_href[-1] == '/': # module index
+                rel_href = "%sindex.html" % rel_href
+            else:
+                rel_href = "%s.html" % rel_href
+            
+            abs_href['href'] = rel_href
+            abs_href['data-linktype'] = "relative-path"
+
+        else:
+            abs_href.replace_with(abs_href.text)
 
     # remove unsupported nav elements
     nav_elements = [
@@ -481,6 +569,7 @@ def rewrite_soup(configuration : Configuration, soup, html_path : str, documents
         ["div"  , { "class" : "container footerContainer"}],
         ["div"  , { "class" : "dropdown-container"}],
         ["div"  , { "class" : "binary-rating-buttons"}],
+        ["ul"  , { "class" : "metadata page-metadata"}],
         ["div"  , { "data-bi-name" : "pageactions"}],
         ["div"  , { "class" : "page-action-holder"}],
         ["div"  , { "class" : "header-holder"}],
@@ -527,95 +616,95 @@ def rewrite_soup(configuration : Configuration, soup, html_path : str, documents
 
     return soup, set(theme_resources)
 
-def rewrite_index_soup(configuration : Configuration, soup, index_html_path : str, documents_dir : str):
-    """ rewrite html contents by fixing links and remove unnecessary cruft """
+# def rewrite_index_soup(configuration : Configuration, soup, index_html_path : str, documents_dir : str):
+#     """ rewrite html contents by fixing links and remove unnecessary cruft """
 
-    # Fix navigations links
-    content_tables = soup.findAll("table", { 
-        "class" : "api-search-results"
-    })
+#     # Fix navigations links
+#     content_tables = soup.findAll("table", { 
+#         "class" : "api-search-results"
+#     })
 
-    for content_table in content_tables:
+#     for content_table in content_tables:
 
-        links = content_table.findAll(lambda tag: tag.name == 'a')
-        link_pattern = re.compile(r"/powershell/module/([\w\.\-]+)/\?view=powershell-")
+#         links = content_table.findAll(lambda tag: tag.name == 'a')
+#         link_pattern = re.compile(r"/powershell/module/([\w\.\-]+)/\?view=powershell-")
 
-        for link in links:
+#         for link in links:
 
-            href = link['href']
-            fixed_href = href
+#             href = link['href']
+#             fixed_href = href
 
 
-            targets = link_pattern.findall(href)
-            if not len(targets): 
-                continue # badly formated 'a' link
+#             targets = link_pattern.findall(href)
+#             if not len(targets): 
+#                 continue # badly formated 'a' link
 
-            module_name = targets[0].lstrip('/').rstrip('/')
-            fixed_href = "powershell/module/%s/%s.html" % (module_name, module_name)
+#             module_name = targets[0].lstrip('/').rstrip('/')
+#             fixed_href = "powershell/module/%s/%s.html" % (module_name, module_name)
             
-            if fixed_href != href:
-                logging.debug("link rewrite : %s -> %s " % ( href, fixed_href))
-                link['href'] = fixed_href
+#             if fixed_href != href:
+#                 logging.debug("link rewrite : %s -> %s " % ( href, fixed_href))
+#                 link['href'] = fixed_href
 
-        # Fix link to module.svg
-        # module_svg_path = os.path.join(documents_dir, Configuration.domain, "en-us", "media", "toolbars", "module.svg")
-        # images = content_table.findAll("img" , {'alt' : "Module"})
-        # for image in images:
-        #     image['src'] =  os.path.relpath(module_svg_path, os.path.dirname(index_html_path))
+#         # Fix link to module.svg
+#         # module_svg_path = os.path.join(documents_dir, Configuration.domain, "en-us", "media", "toolbars", "module.svg")
+#         # images = content_table.findAll("img" , {'alt' : "Module"})
+#         # for image in images:
+#         #     image['src'] =  os.path.relpath(module_svg_path, os.path.dirname(index_html_path))
 
-    # remove unsupported nav elements
-    nav_elements = [
-        ["nav"  , { "class" : "doc-outline", "role" : "navigation"}],
-        ["ul"   , { "class" : "breadcrumbs", "role" : "navigation"}],
-        ["div"  , { "class" : "sidebar", "role" : "navigation"}],
-        ["div"  , { "class" : "dropdown dropdown-full mobilenavi"}],
-        ["p"    , { "class" : "api-browser-description"}],
-        ["div"  , { "class" : "api-browser-search-field-container"}],
-        ["div"  , { "class" : "pageActions"}],
-        ["div"  , { "class" : "dropdown-container"}],
-        ["div"  , { "class" : "container footerContainer"}],
-        ["div"  , { "data-bi-name" : "header", "id" : "headerAreaHolder"}],
-        ["div"  , { "data-bi-name" : "pageactions", "role": "complentary"}],
-        ["div"  , { "class" : "page-action-holder"}],
-        ["footer" , { "data-bi-name" : "footer", "id" : "footer"}],
-        ["div"  , { "id" : "cookie-consent-holder"}],
-        ["nav"  , {  "role" : "navigation"}],
-        ["div"  , { "id" : "left-container"}],
-        ["div"  , { "class" : "binary-rating-holder"}],
-    ]
+#     # remove unsupported nav elements
+#     nav_elements = [
+#         ["nav"  , { "class" : "doc-outline", "role" : "navigation"}],
+#         ["ul"   , { "class" : "breadcrumbs", "role" : "navigation"}],
+#         ["div"  , { "class" : "sidebar", "role" : "navigation"}],
+#         ["div"  , { "class" : "dropdown dropdown-full mobilenavi"}],
+#         ["p"    , { "class" : "api-browser-description"}],
+#         ["div"  , { "class" : "api-browser-search-field-container"}],
+#         ["div"  , { "class" : "pageActions"}],
+#         ["div"  , { "class" : "dropdown-container"}],
+#         ["div"  , { "class" : "container footerContainer"}],
+#         ["div"  , { "data-bi-name" : "header", "id" : "headerAreaHolder"}],
+#         ["div"  , { "data-bi-name" : "pageactions", "role": "complentary"}],
+#         ["div"  , { "class" : "page-action-holder"}],
+#         ["footer" , { "data-bi-name" : "footer", "id" : "footer"}],
+#         ["div"  , { "id" : "cookie-consent-holder"}],
+#         ["nav"  , {  "role" : "navigation"}],
+#         ["div"  , { "id" : "left-container"}],
+#         ["div"  , { "class" : "binary-rating-holder"}],
+#     ]
 
-    for nav in nav_elements:
-        nav_class, nav_attr = nav
+#     for nav in nav_elements:
+#         nav_class, nav_attr = nav
         
-        for nav_tag in soup.findAll(nav_class, nav_attr):
-            _ = nav_tag.extract()
+#         for nav_tag in soup.findAll(nav_class, nav_attr):
+#             _ = nav_tag.extract()
 
-    # remove script elems
-    for head_script in soup.head.findAll("script"):
-            _ = head_script.extract()
-    for body_async_script in soup.body.findAll("script", { "async" : "",  "defer" : ""}):
-            _ = head_script.extract()
+#     # remove script elems
+#     for head_script in soup.head.findAll("script"):
+#             _ = head_script.extract()
+#     for body_async_script in soup.body.findAll("script", { "async" : "",  "defer" : ""}):
+#             _ = head_script.extract()
 
-    # Fixing and downloading css stylesheets
-    theme_output_dir = os.path.join(documents_dir, Configuration.domain)
-    for link in soup.head.findAll("link", { "rel" : "stylesheet"}):
-        uri_path = link['href'].strip()
+#     # Fixing and downloading css stylesheets
+#     theme_output_dir = os.path.join(documents_dir, Configuration.domain)
+#     for link in soup.head.findAll("link", { "rel" : "stylesheet"}):
+#         uri_path = link['href'].strip()
 
-        if not uri_path.lstrip('/').startswith(Configuration.default_theme_uri):
-            continue
+#         if not uri_path.lstrip('/').startswith(Configuration.default_theme_uri):
+#             continue
 
-        # Construct (url, path) tuple
-        css_url = "https://%s/%s" % (Configuration.domain, uri_path)
-        css_filepath =  os.path.join(theme_output_dir, uri_path.lstrip('/'))
+#         # Construct (url, path) tuple
+#         css_url = "https://%s/%s" % (Configuration.domain, uri_path)
+#         css_filepath =  os.path.join(theme_output_dir, uri_path.lstrip('/'))
 
-        # Converting href to a relative link
-        path = os.path.relpath(css_filepath, os.path.dirname(index_html_path))
-        rel_uri = '/'.join(path.split(os.sep))
-        link['href'] = rel_uri
+#         # Converting href to a relative link
+#         path = os.path.relpath(css_filepath, os.path.dirname(index_html_path))
+#         rel_uri = '/'.join(path.split(os.sep))
+#         link['href'] = rel_uri
 
-        download_textfile(css_url, css_filepath)
+#         download_textfile(css_url, css_filepath)
 
-    return soup
+#     return soup
 
 
 def rewrite_html_contents(configuration : Configuration, html_root_dir : str):
@@ -625,7 +714,7 @@ def rewrite_html_contents(configuration : Configuration, html_root_dir : str):
 
     for html_file in glob.glob("%s/**/*.html" % html_root_dir, recursive = True):
 
-        logging.debug("rewrite  html_file : %s" % (html_file))
+        logging.info("rewrite  html_file : %s" % (html_file))
 
         # Read content and parse html
         with open(html_file, 'r', encoding='utf8') as i_fd:
@@ -656,14 +745,15 @@ def download_additional_resources(configuration : Configuration, documents_dir :
         )
 
     # Download index start page
-    index_url = "https://docs.microsoft.com/en-us/windows/win32/desktop-app-technologies"
+    src_index_filepath = os.path.join(documents_dir, Configuration.domain, "win32", "desktop-app-technologies.html")
     index_filepath = os.path.join(documents_dir, Configuration.domain, "win32", "index.html")
+    shutil.copy(src_index_filepath, index_filepath)
 
-    soup = bs( configuration.webdriver.get_url_page(index_url), 'html.parser')
-    soup = rewrite_index_soup(configuration, soup, index_filepath, documents_dir)
-    fixed_html = soup.prettify("utf-8")
-    with open(index_filepath, 'wb') as o_fd:
-        o_fd.write(fixed_html)
+    # soup = bs( configuration.webdriver.get_url_page(index_url), 'html.parser')
+    # soup = rewrite_index_soup(configuration, soup, index_filepath, documents_dir)
+    # fixed_html = soup.prettify("utf-8")
+    # with open(index_filepath, 'wb') as o_fd:
+    #     o_fd.write(fixed_html)
 
 
     # # Download module.svg icon for start page
@@ -703,12 +793,22 @@ def create_sqlite_database(configuration, content_toc, resources_dir, documents_
 
 
     mapping = {
+        # win32 content
         "guides" : "Guide",
         "attributes" : "Attribute",
         "classes" : "Class",
         "entries" : "Entry",
         
+        # api-sdk content
         "categories" : "Category",
+        "files" : "File",
+
+        'callbacks' : "Callback",
+        'functions' : "Function",
+        'enums' : "Enum",
+        'interfaces' : "Interface",
+        'structures' : "Structure",
+
     }
 
     # import pdb;pdb.set_trace()
@@ -753,6 +853,7 @@ def copy_folder(src_folder : str, dst_folder : str):
         else:
             raise
 
+    # print(dst_folder)
     shutil.rmtree(dst_folder,ignore_errors=False,onerror=onerror) 
     shutil.copytree(src_folder, dst_folder)
 
@@ -804,51 +905,45 @@ def main(configuration : Configuration):
     for folder in [source_dir, api_source_dir, download_dir, html_rewrite_dir, additional_resources_dir, package_dir]:
         os.makedirs(folder, exist_ok=True)
 
-    # cloning source directories for scraping contents
-    # logging.info("Downloading win32 markdown zipped sources : %s -> %s" % ("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip")))
-    # download_binary("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip"))
-
-    # logging.info("Extracting win32 markdown zipped sources : ")
-    # with zipfile.ZipFile(os.path.join(source_dir, "docs.zip"), 'r') as zip_ref:
-    #     zip_ref.extractall(source_dir)
-
-    # logging.info("Downloading sdk-api markdown zipped sources : %s -> %s" % ("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip")))
-    # download_binary("https://github.com/MicrosoftDocs/sdk-api/archive/refs/heads/docs.zip", os.path.join(api_source_dir, "docs.zip"))
-
-    # logging.info("Extracting api-sdk markdown zipped sources : ")
-    # with zipfile.ZipFile(os.path.join(api_source_dir, "docs.zip"), 'r') as zip_ref:
-    #     zip_ref.extractall(api_source_dir)
-
-
-
     # _4_ready_to_be_packaged is the final build dir
     docset_dir = os.path.join(package_dir, "%s.docset" % Configuration.docset_name)
     content_dir = os.path.join(docset_dir , "Contents")
     resources_dir = os.path.join(content_dir, "Resources")
     document_dir = os.path.join(resources_dir, "Documents")
 
-    """ 1. Download html pages """
-    logging.info("[1] scraping win32 web contents")
-    content_toc = {}
-    #content_toc = crawl_msdn_contents(configuration, download_dir, source_dir)
+    if conf.crawl_contents:
+        # cloning source directories for scraping contents, extremely long operation
+        logging.info("Downloading win32 markdown zipped sources : %s -> %s" % ("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip")))
+        download_binary("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip"))
 
-    logging.info("[1] scraping sdk-api web contents")
-    api_content_toc = crawl_sdk_api_contents(configuration, download_dir, os.path.join(api_source_dir, "sdk-api-docs/sdk-api-src/content"))
+        logging.info("Extracting win32 markdown zipped sources : ")
+        with zipfile.ZipFile(os.path.join(source_dir, "docs.zip"), 'r') as zip_ref:
+            zip_ref.extractall(source_dir)
 
-    # # do not download twice the win10 api since it's quite a handful
-    # if os.path.exists(os.path.join(win10_download_dir, "toc.json")):
-    #     with open(os.path.join(win10_download_dir, "toc.json"), "r") as content:
-    #         windows_toc = json.load(content)
-    # else:
-    #     windows_toc = crawl_msdn_contents(configuration, win10_download_dir)
-    #     with open(os.path.join(win10_download_dir, "toc.json"), "w") as content:
-    #             json.dump(windows_toc, content)
-        
-    # Merge win10 api content
-    # merge_folders(win10_download_dir, download_dir)
-    content_toc.update(api_content_toc)
-    with open(os.path.join(download_dir, "toc.json"), "w") as content:
-        json.dump(content_toc, content)
+        logging.info("Downloading sdk-api markdown zipped sources : %s -> %s" % ("https://github.com/MicrosoftDocs/win32/archive/refs/heads/docs.zip", os.path.join(source_dir, "docs.zip")))
+        download_binary("https://github.com/MicrosoftDocs/sdk-api/archive/refs/heads/docs.zip", os.path.join(api_source_dir, "docs.zip"))
+
+        logging.info("Extracting api-sdk markdown zipped sources : ")
+        with zipfile.ZipFile(os.path.join(api_source_dir, "docs.zip"), 'r') as zip_ref:
+            zip_ref.extractall(api_source_dir)
+
+
+        """ 1. Download html pages """
+        logging.info("[1] scraping win32 web contents")
+        content_toc = {}
+        content_toc = crawl_msdn_contents(configuration, download_dir, source_dir)
+
+        logging.info("[1] scraping sdk-api web contents")
+        api_content_toc = crawl_sdk_api_contents(configuration, download_dir, api_source_dir)
+
+        # Merge win32 api content
+        content_toc.update(api_content_toc)
+        with open(os.path.join(download_dir, "toc.json"), "w") as content:
+            json.dump(content_toc, content)
+    else:
+        # print(os.path.join(download_dir, "toc.json"))
+        with open(os.path.join(download_dir, "toc.json"), "r") as content:
+                content_toc = json.load(content)
 
     """ 2.  Parse and rewrite html contents """
     logging.info("[2] rewriting urls and hrefs")
@@ -902,29 +997,24 @@ if __name__ == '__main__':
         action="store_true"
     )
 
-    parser.add_argument("-l", "--local", 
-        help="Do not download content. Only for development use.\n" + 
-             "Incompatible with --temporary option", 
-        default=False, 
-        action="store_true"
-    )
 
     parser.add_argument("-o", "--output", 
         help="set output filepath", 
         default = os.path.join(os.getcwd(), "MSDN.tgz"),
     )
 
-    # parser.add_argument("-p", "--phantom", 
-    #     help="path to phantomjs executable", 
-    #     default = None,
-    # )
+    # TESTING parameters
+    parser.add_argument("-r", "--rewrite-only", 
+        help="skip the downloading steps (for testing only purposes)", 
+        default=False, 
+        action="store_true"
+    )
 
-    # parser.add_argument("-m", "--modules", 
-    #     help="filter on selected modules", 
-    #     default = [],
-    #     type=str,
-    #     nargs='+'
-    # )
+    parser.add_argument("-s", "--sampling", 
+        help="generate only a 'sample' docset, in order to test if the rewriting rules are corrects", 
+        default=False, 
+        action="store_true"
+    )
 
     args = parser.parse_args()
     if args.verbose:
