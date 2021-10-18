@@ -394,6 +394,14 @@ def crawl_msdn_contents(configuration: Configuration, download_dir : str, source
         # if counter >=2000:
         #     break
 
+        for image_file in filter(lambda s: os.path.splitext(s)[1] in [".png", ".jpg", ".jpeg"] ,f):
+            realarb = os.path.relpath(r, os.path.join(source_dir, "win32-docs", "desktop-src"))
+            image_dir = os.path.join(download_dir, "docs.microsoft.com/win32", realarb)
+            filepath = os.path.join(image_dir, image_file)
+
+            os.makedirs(image_dir, exist_ok=True)
+            shutil.copyfile(os.path.join(r, image_file), filepath)
+
         for markdown_file in filter(lambda s: os.path.splitext(s)[1] == ".md" ,f):
             page_filename, page_ext = os.path.splitext(markdown_file)
 
