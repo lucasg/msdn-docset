@@ -118,7 +118,7 @@ class Configuration:
         # selenium webdriver
         self.webdriver = PoshWebDriver()
 
-        self.crawl_contents  = not args.rewrite_only
+        self.crawl_contents  = True
 
         # selected module
         # self.filter_modules = [module.lower() for module in args.modules]
@@ -991,29 +991,40 @@ if __name__ == '__main__':
         action="store_true"
     )
 
-    parser.add_argument("-t", "--temporary", 
+    subparsers = parser.add_subparsers(help='sub-command help', dest='command')
+
+
+    parser_create = subparsers.add_parser('create_docset', help='scrap the internet in order to create a docset')
+    parser_create.add_argument("-t", "--temporary", 
         help="Use a temporary directory for creating docset, otherwise use current dir.", 
         default=False, 
         action="store_true"
     )
 
 
-    parser.add_argument("-o", "--output", 
+    parser_create.add_argument("-o", "--output", 
         help="set output filepath", 
         default = os.path.join(os.getcwd(), "MSDN.tgz"),
     )
 
-    # TESTING parameters
-    parser.add_argument("-r", "--rewrite-only", 
-        help="skip the downloading steps (for testing only purposes)", 
+    parser_create.add_argument("-s", "--sampling", 
+        help="generate only a 'sample' docset, in order to test if the rewriting rules are corrects", 
         default=False, 
         action="store_true"
     )
 
-    parser.add_argument("-s", "--sampling", 
-        help="generate only a 'sample' docset, in order to test if the rewriting rules are corrects", 
-        default=False, 
-        action="store_true"
+    parser_rewrite = subparsers.add_parser('rewrite_html', help='rewrite html file in order to test rules')
+
+    parser_rewrite.add_argument("input", 
+        help="set input filepath"
+    )
+
+    parser_rewrite.add_argument("output", 
+        help="set output filepath"
+    )
+
+    parser_rewrite.add_argument("html_root_dir", 
+        help="set html_root_dir filepath"
     )
 
     args = parser.parse_args()
@@ -1024,12 +1035,35 @@ if __name__ == '__main__':
     else:
         logging.basicConfig(level=logging.INFO)
 
-    conf = Configuration( args )
 
-    if args.temporary:
+    if args.command == "rewrite_html":
 
-        with tempfile.TemporaryDirectory() as tmp_builddir:
-            conf.build_folder = tmp_builddir
+        conf = Configuration( args )
+
+        # Read content and parse html
+        with open(args.input, 'r', encoding='utf8') as i_fd:
+            html_content = i_fd.read()
+
+        soup = bs(html_content, 'html.parser')
+        
+        # rewrite html
+        soup, resources = rewrite_soup(conf, soup, args.input, args.html_root_dir)
+
+        # Export fixed html
+        fixed_html = soup.prettify("utf-8")
+        with open(args.output, 'wb') as o_fd:
+            o_fd.write(fixed_html)
+
+    elif args.command == "create_docset":
+        conf = Configuration( args )
+
+        if args.temporary:
+
+            with tempfile.TemporaryDirectory() as tmp_builddir:
+                conf.build_folder = tmp_builddir
+                main(conf)
+        else:
             main(conf)
+
     else:
-        main(conf)
+        raise NotImplementedError("command not implemented %s" % args.command)
