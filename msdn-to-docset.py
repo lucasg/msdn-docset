@@ -541,29 +541,92 @@ def rewrite_soup(configuration : Configuration, soup, html_path : str, documents
             logging.info("link rewrite : %s -> %s " % ( href, fixed_href))
             link['href'] = fixed_href
 
-    # remove link to external references since we can't support it
+    # remove link to external references if we can't support it
     for abs_href in soup.findAll("a", { "data-linktype" : "absolute-path"}):
 
-        # TODO : some externals hrefs are like this :
+        # some externals hrefs are like this win32 -> api:
         #   <a href="/en-us/windows/win32/api/activation/nn-activation-iactivationfactory" data-linktype="absolute-path">IActivationFactory</a>
-        # so find a way to fix the link anyway
         if abs_href['href'].startswith("/en-us/windows/win32/api/"):
 
-            full_url_target = "docs.microsoft.com"  + abs_href['href']
-            full_url_html_page = os.path.relpath(os.path.dirname(html_path), documents_dir)
+            # remove prefixing /
+            prefix, *abs_suffix = abs_href['href'].split("/")
 
-            rel_href = os.path.join(documents_dir, "docs.microsoft.com"  + abs_href['href'])
+            # strip .html if it exists
+            html_uri, ext = os.path.splitext(os.path.relpath(html_path, os.path.join(documents_dir, "docs.microsoft.com")))
+            uri_target, ext = os.path.splitext(os.path.join("docs.microsoft.com",  *abs_suffix))
+
+            rel_href =  os.path.relpath(uri_target, html_uri)
+
             #rel_href = os.path.relpath(full_url_target, full_url_html_page)
             if rel_href[-1] == '/': # module index
                 rel_href = "%sindex.html" % rel_href
             else:
                 rel_href = "%s.html" % rel_href
             
+            logging.info("link rewrite : %s -> %s " % (abs_href['href'], rel_href))               
             abs_href['href'] = rel_href
             abs_href['data-linktype'] = "relative-path"
 
+        # some externals hrefs are like this win32 -> win32 :
+        # <a href="/en-us/windows/desktop/api/FileAPI/nf-fileapi-definedosdevicew" data-linktype="absolute-path"><strong>DefineDosDevice</strong></a>
+        elif abs_href['href'].startswith("/en-us/windows/desktop/api/"):
+                
+            # rewrite /en-us/windows/desktop/api to /en-us/windows/win32/api
+            prefix, abs_suffix = abs_href['href'].split("/en-us/windows/desktop/api/")
+
+
+            # strip .html if it exists
+            html_uri, ext = os.path.splitext(os.path.relpath(html_path, os.path.join(documents_dir, "docs.microsoft.com")))
+            uri_target, ext = os.path.splitext(os.path.join("docs.microsoft.com", "en-us", "windows", "win32", "api" , abs_suffix))
+
+            rel_href =  os.path.relpath(uri_target, html_uri)
+
+            #rel_href = os.path.relpath(full_url_target, full_url_html_page)
+            if rel_href[-1] == '/': # module index
+                rel_href = "%sindex.html" % rel_href
+            else:
+                rel_href = "%s.html" % rel_href
+            
+            logging.info("link rewrite : %s -> %s " % (abs_href['href'], rel_href))
+            abs_href['href'] = rel_href
+            abs_href['data-linktype'] = "relative-path"
+
+
+        # some externals hrefs are like this win32 -> win32 :
+        #   <a href="/en-us/windows/desktop/winauto/inspect-objects" data-linktype="absolute-path">Inspect</a>
+        elif abs_href['href'].startswith("/en-us/windows/desktop/"):
+                
+            # rewrite /en-us/windows/desktop to /win32/
+            prefix, abs_suffix = abs_href['href'].split("/en-us/windows/desktop/")
+
+
+            # strip .html if it exists
+            html_uri, ext = os.path.splitext(os.path.relpath(html_path, os.path.join(documents_dir, "docs.microsoft.com")))
+            uri_target, ext = os.path.splitext(os.path.join("docs.microsoft.com", "win32", abs_suffix))
+
+            rel_href =  os.path.relpath(uri_target, html_uri)
+
+            #rel_href = os.path.relpath(full_url_target, full_url_html_page)
+            if rel_href[-1] == '/': # module index
+                rel_href = "%sindex.html" % rel_href
+            else:
+                rel_href = "%s.html" % rel_href
+            
+            logging.info("link rewrite : %s -> %s " % (abs_href['href'], rel_href))
+            abs_href['href'] = rel_href
+            abs_href['data-linktype'] = "relative-path"
+
+        # some externals hrefs are like this :
+        #   <a href="/en-us/uwp/api/windows.ui.viewmanagement.uisettings.textscalefactorchanged" data-linktype="absolute-path">UISettings.TextScaleFactorChanged Event</a>
+        elif abs_href['href'].startswith("/en-us/"):
+            full_url_target = "https://docs.microsoft.com"  + abs_href['href']
+            abs_href['href'] = full_url_target
+
+        # Remove every other linktype absolute since we don't know how to handle it
         else:
-            abs_href.replace_with(abs_href.text)
+            # TODO : currently we don't replace it in order to show the broken urls
+            # abs_href.replace_with(abs_href.text)
+            pass
 
     # remove unsupported nav elements
     nav_elements = [
